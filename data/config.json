@@ -1,0 +1,7 @@
+{
+    "mqtt_server": "192.168.1.41",
+    "key": "M1k3y1sdAb3St0n4",
+    "nodeMCUClient": "esp8266",
+    "userMQTT": "mqtt_rfid",
+    "passwordMQTT": "password"
+}
