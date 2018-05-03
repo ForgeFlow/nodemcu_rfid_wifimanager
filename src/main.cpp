@@ -205,8 +205,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.println(msg);
   Serial.println();
 
-  if(strcmp(id, nodeMCUClient) == 0){
-      if(strcmp(topic, "response") == 0){
+  
+  if(strcmp(topic, "response") == 0){
+      if(strcmp(id, nodeMCUClient) == 0){
           cnt = 0;
           if(strcmp(msg, "NOAUTH") == 0){
               digitalWrite(RED_LED, HIGH);
@@ -253,34 +254,35 @@ void callback(char* topic, byte* payload, unsigned int length) {
                   }
               }
           }
-      } else if(strcmp(topic, "ack") == 0){
-          if(strcmp(msg, "otherID") == 0){
-            Serial.println("OTHER ID");
-            Serial.println();
-            ESP.reset();
-          } else {
-            cnt_ack = 0;
-            cnt=0;
-            flag_ack = 0;
-            strcpy(iv_py,msg);
-            Serial.println(" ");
-            Serial.println(iv_py);
-            Serial.println(" ");
-            hmac.doUpdate(iv_py,strlen(iv_py));
-            hmac.doFinal(authCode);
-            Serial.println("AUTH CODE");
-            Serial.println();
-          
-            for (byte i=0; i < SHA256HMAC_SIZE; i++)
-            {
-              Serial.print("0123456789abcdef"[authCode[i]>>4]);
-              Serial.print("0123456789abcdef"[authCode[i]&0xf]);
-            }
-            Serial.println(" ");
-            flag_init = 0;
-          }
-      } else Serial.println("ELSE " + mensagem);
-  }
+      }
+  } else if(strcmp(topic, "ack") == 0){
+      if(strcmp(msg, "otherID") == 0){
+         Serial.println("OTHER ID");
+         Serial.println();
+         ESP.reset();
+      } else {
+        cnt_ack = 0;
+        //cnt=0;
+        flag_ack = 0;
+        strcpy(iv_py,msg);
+        Serial.println(" ");
+        Serial.println(iv_py);
+        Serial.println(" ");
+        hmac.doUpdate(iv_py,strlen(iv_py));
+        hmac.doFinal(authCode);
+        Serial.println("AUTH CODE");
+        Serial.println();
+       
+        for (byte i=0; i < SHA256HMAC_SIZE; i++)
+        {
+         Serial.print("0123456789abcdef"[authCode[i]>>4]);
+          Serial.print("0123456789abcdef"[authCode[i]&0xf]);
+        }
+        Serial.println(" ");
+        flag_init = 0;
+      }
+  } else Serial.println("ELSE " + mensagem);
+  
 }
 
 /*****************************************************************************************************************/
@@ -291,7 +293,7 @@ void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);                      
   Serial.println();
-
+  //wifiManager.resetSettings();
   pinMode(RESET_PIN, INPUT); 
   pinMode(RED_LED, OUTPUT);
   pinMode(GREEN_LED, OUTPUT);
@@ -520,7 +522,7 @@ void loop() {
   // Show some details of the PICC (that is: the tag/card)
   Serial.println("");
 
-  if (currentCard == "" && cnt > 60) { // this cnt allows to make a wait between card reads 
+  if (currentCard == "" && cnt > 25) { // this cnt allows to make a wait between card reads 
     base64_encode(authCodeb64, (char *)authCode, SHA256HMAC_SIZE);
     snprintf(buf_hmac, sizeof buf_hmac, "%s###%s", nodeMCUClient, (char *)authCodeb64);
     client.publish("hmac", buf_hmac);
@@ -534,7 +536,7 @@ void loop() {
     
     Serial.println("");
     Serial.print("MESSAGE: " + String(rfid_b64));
-    if(currentCard != currentCardold || cnt > 90){ // this cnt allows to set the time between card reads for the same card
+    if(currentCard != currentCardold || cnt > 60){ // this cnt allows to set the time between card reads for the same card
       snprintf(buf_acceso, sizeof buf_acceso, "%s###%s", nodeMCUClient, rfid_b64);
       client.publish("acceso", buf_acceso);
     } else {
