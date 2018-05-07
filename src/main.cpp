@@ -8,8 +8,6 @@
 /*                                                                                                               */
 /*     - key: Password for AES encryption and HMAC authentication                                                */
 /*                                                                                                               */
-/*     - nodeMCUClient: Device ID for the MQTT communication                                                     */
-/*                                                                                                               */
 /*     - userMQTT: Username for this device at the MQTT communication                                            */
 /*                                                                                                               */
 /*     - passwordMQTT: Password for this device at the MQTT communication                                        */
@@ -50,15 +48,15 @@
 
 int cnt=0; // Counter used to assure that one RFID card can't be considered twice in a time interval
 int cnt_ack = 0; // Counter used to manage the possibility of the Python client to be disconnected
+int cnt_rst = 0;
 
 int flag_init = 1; // Flag that allows to manage the starting and end of a session
 int flag_ack = 0; // Flag to manage the ACK counter
 
 /*  Variables for the config.json file  */
 
-char mqtt_server[15];
+char mqtt_server[255];
 char key[20];
-char nodeMCUClient[15];
 char userMQTT[15];
 char passwordMQTT[15];
 
@@ -78,6 +76,7 @@ char buf[512];
 char buf_init[20];
 char buf_hmac[256];
 char buf_acceso[256];
+char espID[20];
 
 /*  Other variables  */
 
@@ -150,8 +149,9 @@ void dump_byte_array(byte *buffer, byte bufferSize) {
 void conectMqtt() {
   while (!client.connected()) {
     Serial.print("ConnectingMQTT ...");
-    if (client.connect(nodeMCUClient,userMQTT,passwordMQTT)){  //"esp8266","mqtt_rfid","password"
+    if (client.connect(espID,userMQTT,passwordMQTT)){  //"esp8266","mqtt_rfid","password"
       Serial.println("Connected");
+      cnt_rst = 0;
       //Subscribing to topics
       client.subscribe("response");
       client.subscribe("ack");
@@ -160,6 +160,14 @@ void conectMqtt() {
       Serial.print("Error");
       Serial.print(client.state());
       Serial.println("Retry in 5 seconds");
+      if (WiFi.status() == WL_CONNECTED) {
+        cnt_rst = cnt_rst + 1;
+        Serial.println(cnt_rst);
+        if (cnt_rst >= 30){
+          wifiManager.resetSettings();
+          ESP.reset();
+        }
+      }
     }
     delay(500);
     digitalWrite(RED_LED, LOW);
@@ -207,7 +215,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   
   if(strcmp(topic, "response") == 0){
-      if(strcmp(id, nodeMCUClient) == 0){
+      if(strcmp(id, espID) == 0){
           cnt = 0;
           if(strcmp(msg, "NOAUTH") == 0){
               digitalWrite(RED_LED, HIGH);
@@ -293,7 +301,9 @@ void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);                      
   Serial.println();
-  //wifiManager.resetSettings();
+  String ssid = "ESP" + String(ESP.getChipId());
+  Serial.println(ssid);
+  // wifiManager.resetSettings();
   pinMode(RESET_PIN, INPUT); 
   pinMode(RED_LED, OUTPUT);
   pinMode(GREEN_LED, OUTPUT);
@@ -324,7 +334,6 @@ void setup() {
           Serial.println("\nparsed json");
           strcpy(mqtt_server, json["mqtt_server"]);
           strcpy(key, json["key"]);
-          strcpy(nodeMCUClient, json["nodeMCUClient"]);
           strcpy(userMQTT, json["userMQTT"]);
           strcpy(passwordMQTT, json["passwordMQTT"]);
         } else {
@@ -339,17 +348,15 @@ void setup() {
   
   Serial.println(mqtt_server);
   Serial.println(key);
-  Serial.println(nodeMCUClient);
   Serial.println(userMQTT);
   Serial.println(passwordMQTT);
-
+  
   // The extra parameters to be configured (can be either global or just in the setup)
   // After connecting, parameter.getValue() will get you the configured value
   // id/name placeholder/prompt default length
 
-  WiFiManagerParameter custom_mqtt_server("mqtt_server", "MQTT Server", mqtt_server, 14);
+  WiFiManagerParameter custom_mqtt_server("mqtt_server", "MQTT Server", mqtt_server, 254);
   WiFiManagerParameter custom_key("key", "AES key", key, 19);
-  WiFiManagerParameter custom_nodeMCUClient("nodeMCUClient", "NodeMCU Client", nodeMCUClient, 14);
   WiFiManagerParameter custom_userMQTT("userMQTT", "MQTT Username", userMQTT, 14);
   WiFiManagerParameter custom_passwordMQTT("passwordMQTT", "MQTT Password", passwordMQTT, 14);
 
@@ -364,7 +371,6 @@ void setup() {
 
   wifiManager.addParameter(&custom_mqtt_server);
   wifiManager.addParameter(&custom_key);
-  wifiManager.addParameter(&custom_nodeMCUClient);
   wifiManager.addParameter(&custom_userMQTT);
   wifiManager.addParameter(&custom_passwordMQTT);
 
@@ -377,31 +383,29 @@ void setup() {
   //sets timeout until configuration portal gets turned off
   //useful to make it all retry or go to sleep
   //in seconds
-  wifiManager.setTimeout(180);
+  wifiManager.setTimeout(300);
 
   //fetches ssid and pass and tries to connect
   //if it does not connect it starts an access point with the specified name
   //here  "AutoConnectAP"
   //and goes into a blocking loop awaiting configuration
 
-  if (!wifiManager.autoConnect("AutoConnectAP", "12345678")) {
+  if (!wifiManager.autoConnect("AutoConnectAP", "")) {
     Serial.println("failed to connect and hit timeout");
     delay(3000);
     //reset and try again, or maybe put it to deep sleep
     ESP.reset();
     delay(5000);
   } else {
-    Serial.println("password:12345678");
+    //if you get here you have connected to the WiFi
+    Serial.println("*CONNECTED*");
   }
-
-  //if you get here you have connected to the WiFi
-  Serial.println("*CONNECTED*");
+  
 
   //read updated parameters
 
   strcpy(mqtt_server, custom_mqtt_server.getValue());
   strcpy(key, custom_key.getValue());
-  strcpy(nodeMCUClient, custom_nodeMCUClient.getValue());
   strcpy(userMQTT, custom_userMQTT.getValue());
   strcpy(passwordMQTT, custom_passwordMQTT.getValue());
 
@@ -412,14 +416,12 @@ void setup() {
     JsonObject& json = jsonBuffer.createObject();
 
     json["mqtt_server"] = mqtt_server;
-    json["key"] = key;//"M1k3y1sdAb3St0n3";
-    json["nodeMCUClient"] = nodeMCUClient;
+    json["key"] = key;
     json["userMQTT"] = userMQTT;
     json["passwordMQTT"] = passwordMQTT;   
 
     Serial.println("+++++++++++++++++");
 
-    Serial.println(nodeMCUClient);
     Serial.println(userMQTT);
     Serial.println(passwordMQTT);
 
@@ -455,9 +457,12 @@ void setup() {
 
   Serial.println("#############################################################################");
 
+  int espID_int = ESP.getChipId();
+  itoa(espID_int,espID,10);
+
   cnt = 0;
 
-  snprintf(buf_init, sizeof buf_init, "%s###%s", nodeMCUClient, "INIT");
+  snprintf(buf_init, sizeof buf_init, "%s###%s", espID, "INIT");
 
 }
 
@@ -524,7 +529,7 @@ void loop() {
 
   if (currentCard == "" && cnt > 25) { // this cnt allows to make a wait between card reads 
     base64_encode(authCodeb64, (char *)authCode, SHA256HMAC_SIZE);
-    snprintf(buf_hmac, sizeof buf_hmac, "%s###%s", nodeMCUClient, (char *)authCodeb64);
+    snprintf(buf_hmac, sizeof buf_hmac, "%s###%s", espID, (char *)authCodeb64);
     client.publish("hmac", buf_hmac);
 
     dump_byte_array(mfrc522.uid.uidByte, mfrc522.uid.size);
@@ -537,7 +542,7 @@ void loop() {
     Serial.println("");
     Serial.print("MESSAGE: " + String(rfid_b64));
     if(currentCard != currentCardold || cnt > 60){ // this cnt allows to set the time between card reads for the same card
-      snprintf(buf_acceso, sizeof buf_acceso, "%s###%s", nodeMCUClient, rfid_b64);
+      snprintf(buf_acceso, sizeof buf_acceso, "%s###%s", espID, rfid_b64);
       client.publish("acceso", buf_acceso);
     } else {
       currentCard = "";
