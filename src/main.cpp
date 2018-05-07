@@ -163,7 +163,7 @@ void conectMqtt() {
       if (WiFi.status() == WL_CONNECTED) {
         cnt_rst = cnt_rst + 1;
         Serial.println(cnt_rst);
-        if (cnt_rst >= 30){
+        if (cnt_rst >= 1000){
           wifiManager.resetSettings();
           ESP.reset();
         }
@@ -276,6 +276,13 @@ void callback(char* topic, byte* payload, unsigned int length) {
         Serial.println(" ");
         Serial.println(iv_py);
         Serial.println(" ");
+        Serial.println(strlen(iv_py));
+        Serial.println(" ");
+        if(strlen(iv_py)!=16){
+          flag_init=1;
+          Serial.print("^^^^^^^^^^^^^^ INCORRECT IV SIZE ^^^^^^^^^^^^^^^");
+          return;
+        }
         hmac.doUpdate(iv_py,strlen(iv_py));
         hmac.doFinal(authCode);
         Serial.println("AUTH CODE");
@@ -303,7 +310,7 @@ void setup() {
   Serial.println();
   String ssid = "ESP" + String(ESP.getChipId());
   Serial.println(ssid);
-  // wifiManager.resetSettings();
+  //wifiManager.resetSettings();
   pinMode(RESET_PIN, INPUT); 
   pinMode(RED_LED, OUTPUT);
   pinMode(GREEN_LED, OUTPUT);
@@ -356,7 +363,7 @@ void setup() {
   // id/name placeholder/prompt default length
 
   WiFiManagerParameter custom_mqtt_server("mqtt_server", "MQTT Server", mqtt_server, 254);
-  WiFiManagerParameter custom_key("key", "AES key", key, 19);
+  WiFiManagerParameter custom_key("key", "Key", key, 19);
   WiFiManagerParameter custom_userMQTT("userMQTT", "MQTT Username", userMQTT, 14);
   WiFiManagerParameter custom_passwordMQTT("passwordMQTT", "MQTT Password", passwordMQTT, 14);
 
