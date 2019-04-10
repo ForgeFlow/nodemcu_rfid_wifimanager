@@ -1,6 +1,0 @@
-{
-    "terminal.integrated.env.linux": {
-        "PATH": "/home/hveficent/.platformio/penv/bin:/home/hveficent/.platformio/penv:/home/hveficent/bin:/home/hveficent/.local/bin:/home/hveficent/.rbenv/plugins/ruby-build/bin:/home/hveficent/.rbenv/shims:/home/hveficent/.rbenv/bin:/home/hveficent/.rbenv/shims:/home/hveficent/.rbenv/shims:/home/hveficent/.rbenv/bin:/home/hveficent/bin:/home/hveficent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/usr/share/rvm/bin",
-        "PLATFORMIO_CALLER": "vscode"
-    }
-}

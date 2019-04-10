@@ -205,9 +205,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.println(msg);
   Serial.println();
 
-  
-  if(strcmp(topic, "response") == 0){
-      if(strcmp(id, nodeMCUClient) == 0){
+  if(strcmp(id, nodeMCUClient) == 0){
+      if(strcmp(topic, "response") == 0){
           cnt = 0;
           if(strcmp(msg, "NOAUTH") == 0){
               digitalWrite(RED_LED, HIGH);
@@ -254,35 +253,34 @@ void callback(char* topic, byte* payload, unsigned int length) {
                   }
               }
           }
-      }
-  } else if(strcmp(topic, "ack") == 0){
-      if(strcmp(msg, "otherID") == 0){
-         Serial.println("OTHER ID");
-         Serial.println();
-         ESP.reset();
-      } else {
-        cnt_ack = 0;
-        //cnt=0;
-        flag_ack = 0;
-        strcpy(iv_py,msg);
-        Serial.println(" ");
-        Serial.println(iv_py);
-        Serial.println(" ");
-        hmac.doUpdate(iv_py,strlen(iv_py));
-        hmac.doFinal(authCode);
-        Serial.println("AUTH CODE");
-        Serial.println();
-       
-        for (byte i=0; i < SHA256HMAC_SIZE; i++)
-        {
-         Serial.print("0123456789abcdef"[authCode[i]>>4]);
-          Serial.print("0123456789abcdef"[authCode[i]&0xf]);
-        }
-        Serial.println(" ");
-        flag_init = 0;
-      }
-  } else Serial.println("ELSE " + mensagem);
-  
+      } else if(strcmp(topic, "ack") == 0){
+          if(strcmp(msg, "otherID") == 0){
+            Serial.println("OTHER ID");
+            Serial.println();
+            ESP.reset();
+          } else {
+            cnt_ack = 0;
+            //cnt=0;
+            flag_ack = 0;
+            strcpy(iv_py,msg);
+            Serial.println(" ");
+            Serial.println(iv_py);
+            Serial.println(" ");
+            hmac.doUpdate(iv_py,strlen(iv_py));
+            hmac.doFinal(authCode);
+            Serial.println("AUTH CODE");
+            Serial.println();
+        
+            for (byte i=0; i < SHA256HMAC_SIZE; i++)
+            {
+            Serial.print("0123456789abcdef"[authCode[i]>>4]);
+              Serial.print("0123456789abcdef"[authCode[i]&0xf]);
+            }
+            Serial.println(" ");
+            flag_init = 0;
+          }
+    }
+  } else Serial.println("Message not for this device: " + mensagem);
 }
 
 /*****************************************************************************************************************/
