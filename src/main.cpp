@@ -58,8 +58,6 @@ int flag_ack = 0; // Flag to manage the ACK counter
 int flag_response = 0; // Timeout to consider message lost
 int flag_auth = 1;
 
-int version = 2; // Number of version being used (2 to use authentication step)
-
 /*  Variables for the config.json file  */
 
 char mqtt_server[15];
@@ -280,11 +278,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
             flag_response = 0;
             response(int(msg));
         } else if(strcmp(topic, "ack") == 0){
-            if(strcmp(msg, "otherID") == 0){
-                // Version compatibility --> To be deleted
-                Serial.println("HMAC Step failed: Other Device ID");
-                ESP.reset();
-            } else if (strcmp(msg, "sessionExpired") == 0){
+            // Types of ACK response
+            if (strcmp(msg, "sessionExpired") == 0){
                 Serial.println("Session has expired, restarting ESP...");
                 ESP.reset();
             } else if (strcmp(msg, "authenticationFailed") == 0){
@@ -559,7 +554,7 @@ void loop() {
 
     // Enter here if flag_ack = 0 (device has already received ack from init step) and flag_auth = 0 (device has not been
     // authenticated yet) --> Authentication step
-    if (!flag_ack && flag_auth && version == 2) {
+    if (!flag_ack && flag_auth) {
         Serial.println("Going for authentication");
         // Encode authCode (sessionId after HMAC encryption) and publish to hmac channel
         base64_encode(authCodeb64, (char *)authCode, SHA256HMAC_SIZE);
@@ -583,38 +578,7 @@ void loop() {
         return;
     }
 
-    if (version == 1 && currentCard == "" && cnt > 25) { // this cnt allows to make a wait between card reads
-        base64_encode(authCodeb64, (char *)authCode, SHA256HMAC_SIZE);
-        snprintf(buf_hmac, sizeof buf_hmac, "%s###%s", nodeMCUClient, (char *)authCodeb64);
-        client.publish("hmac", buf_hmac);
-
-        dump_byte_array(mfrc522.uid.uidByte, mfrc522.uid.size); // Here we set the value for currentCard
-        encrypt_rfid(rfidstr,iv_py);
-        Serial.println("");
-        Serial.print("CURRENT CARD: " + String(currentCard));
-        Serial.println("");
-        Serial.print("CURRENT CARD OLD: " + String(currentCardOld));
-
-        Serial.println("");
-        Serial.print("MESSAGE: " + String(rfid_b64));
-        if(currentCard != currentCardOld || cnt > 60){ // this cnt allows to set the time between card reads for the same card
-            snprintf(buf_access, sizeof buf_access, "%s###%s", nodeMCUClient, rfid_b64);
-            client.publish("access", buf_access);
-        } else {
-            currentCard = "";
-        }
-        memset(rfid_b64, 0, sizeof(rfid_b64));
-        memset(rfidstr, 0, sizeof(rfidstr));
-        memset(buf_hmac, 0, sizeof(buf_hmac));
-        memset(buf_access, 0, sizeof(buf_access));
-
-        Serial.println();
-        flag_init = 1;
-        currentCardOld = currentCard;
-        currentCard = "";
-        cnt = 0;
-    }
-    if (version == 2 && currentCard == "" && cnt > 25) { // this cnt allows to make a wait between card reads
+    if (currentCard == "" && cnt > 25) { // this cnt allows to make a wait between card reads
         // Encrypt RFID ID to be sent over access channel
         dump_byte_array(mfrc522.uid.uidByte, mfrc522.uid.size); // Here we set the value for currentCard
         encrypt_rfid(rfidstr, iv_py);
