@@ -51,7 +51,7 @@
 int cnt = 0; // Counter used to assure that one RFID card can't be considered twice in a time interval
 int cnt_ack = 0; // Counter used to manage the possibility of the Python client to be disconnected
 int cnt_response = 0; // Counter used to manage the possibility of losing response message
-int timeout = 10000; // Timeout value
+int timeout = 1000; // Timeout value
 
 int flag_init = 1; // Flag that allows to manage the starting and end of a session
 int flag_ack = 0; // Flag to manage the ACK counter
@@ -266,35 +266,37 @@ void callback(char* topic, byte* payload, unsigned int length) {
         Serial.print(id);
         Serial.print(" Payload: ");
         Serial.println(msg);
+        // Response message received transaction with currentCard finished
+        currentCardOld = currentCard;
+        currentCard = "";
 
         if(strcmp(topic, "response") == 0){
             Serial.println("Response message received, printing action...");
-            // Response message received transaction with currentCard finished
-            currentCardOld = currentCard;
-            currentCard = "";
 
             // Setting counter to zero and printing response
             cnt = 0;
-            flag_response = 0;
+            flag_init = 1;
+            flag_auth = 1;
             response(int(msg));
         } else if(strcmp(topic, "ack") == 0){
             // Types of ACK response
             if (strcmp(msg, "sessionExpired") == 0){
-                Serial.println("Session has expired, restarting ESP...");
-                ESP.reset();
+                Serial.println("Session has expired, restarting init process...");
+                flag_init = 1;
+                flag_auth = 1;
             } else if (strcmp(msg, "authenticationFailed") == 0){
                 Serial.println("Authentication process failed, trying again...");
-                ESP.reset();
+                flag_init = 1;
+                flag_auth = 1;
             } else if (strcmp(msg, "authenticationSuccessful") == 0){
                 // Logic when authenticated
                 Serial.println("Authentication process succeed");
                 response(200);
-                cnt_ack = 0;
                 flag_auth = 0;
-                flag_ack = 0;
             } else if (strcmp(msg, "notAuthenticated") == 0){
                 Serial.println("Not authenticated... restarting");
-                ESP.reset();
+                flag_init = 1;
+                flag_auth = 1;
             } else {
                 if (strlen(msg) == sessionIdLength) {
                     Serial.println("Init ACK received with session ID");
@@ -311,16 +313,20 @@ void callback(char* topic, byte* payload, unsigned int length) {
                         Serial.print("0123456789abcdef"[authCode[i]&0xf]);
                     }
                     Serial.println();
-
-                    // Init step done
-                    cnt_ack = 0;
                     flag_init = 0;
-                    flag_ack = 0;
                 } else {
                     Serial.println("Unidentified ACK message");
+                    flag_init = 1;
+                    flag_auth = 1;
                 }
             }
+            cnt = 0;
+            cnt_ack = 0;
+            flag_ack = 0;
         }
+
+        flag_response = 0;
+
     } else Serial.println("Message not for this device: " + mensagem);
 }
 
@@ -578,30 +584,25 @@ void loop() {
         return;
     }
 
-    if (currentCard == "" && cnt > 25) { // this cnt allows to make a wait between card reads
+    if (cnt > 25 && !flag_response) { // this cnt allows to make a wait between card reads
         // Encrypt RFID ID to be sent over access channel
         dump_byte_array(mfrc522.uid.uidByte, mfrc522.uid.size); // Here we set the value for currentCard
         encrypt_rfid(rfidstr, iv_py);
-        flag_response = 1;
 
         // Sent message to MQTT server
-        Serial.println("Message sent: " + String(rfid_b64));
         if(currentCard != currentCardOld || cnt > 60){ // this cnt allows to set the time between card reads for the same card
+            Serial.println("Message sent: " + String(rfid_b64));
             snprintf(buf_access, sizeof buf_access, "%s###%s", nodeMCUClient, rfid_b64);
             client.publish("access", buf_access);
+            flag_response = 1;
         } else {
             currentCard = "";
         }
-
         // Memory reset
         memset(rfid_b64, 0, sizeof(rfid_b64));
         memset(rfidstr, 0, sizeof(rfidstr));
         memset(buf_hmac, 0, sizeof(buf_hmac));
         memset(buf_access, 0, sizeof(buf_access));
-
-        cnt = 0;
-        flag_init = 1;
-        flag_auth = 1;
     }
 
 }
