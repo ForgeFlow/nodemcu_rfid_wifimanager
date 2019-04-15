@@ -277,7 +277,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
             cnt = 0;
             flag_init = 1;
             flag_auth = 1;
-            response(int(msg));
+            response(atoi(msg));
         } else if(strcmp(topic, "ack") == 0){
             // Types of ACK response
             if (strcmp(msg, "sessionExpired") == 0){
@@ -291,7 +291,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
             } else if (strcmp(msg, "authenticationSuccessful") == 0){
                 // Logic when authenticated
                 Serial.println("Authentication process succeed");
-                response(200);
+                // response(200);
                 flag_auth = 0;
             } else if (strcmp(msg, "notAuthenticated") == 0){
                 Serial.println("Not authenticated... restarting");
