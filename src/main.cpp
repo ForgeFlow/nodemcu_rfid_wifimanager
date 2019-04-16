@@ -32,6 +32,7 @@
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
 #include <SPI.h>
 #include "MFRC522.h"
+#include "pitches.h"
 
 #define RST_PIN 0 // RST-PIN for RC522 - RFID 
 #define SS_PIN 2  // SDA-PIN for RC522 - RFID  
@@ -83,6 +84,18 @@ char buf[512];
 char buf_init[20];
 char buf_hmac[256];
 char buf_access[256];
+
+/* notes in the melody: */
+
+int melody[] = {
+    NOTE_C4, NOTE_G3, NOTE_G3, NOTE_A3, NOTE_G3, 0, NOTE_B3, NOTE_C4
+};
+
+/* note durations: 4 = quarter note, 8 = eighth note, etc.: */
+
+int noteDurations[] = {
+    4, 8, 8, 4, 4, 4, 4, 4
+};
 
 /*  Other variables  */
 
@@ -147,12 +160,39 @@ void dump_byte_array(byte *buffer, byte bufferSize) {
 
 void response(int response_code) {
     switch(response_code) {
-        case 200:
-            // 200: Success Internal
+        case 100:
+            // 100: Setup melody
+            // iterate over the notes of the melody:
+            for (int thisNote = 0; thisNote < 8; thisNote++) {
+                // to calculate the note duration, take one second divided by the note type.
+                //e.g. quarter note = 1000 / 4, eighth note = 1000/8, etc.
+                int noteDuration = 1000 / noteDurations[thisNote];
+                digitalWrite(GREEN_LED, HIGH);
+                tone(BEEP, melody[thisNote], noteDuration);
+
+                // to distinguish the notes, set a minimum time between them.
+                // the note's duration + 30% seems to work well:
+                int pauseBetweenNotes = noteDuration * 1.30;
+                delay(pauseBetweenNotes);
+                digitalWrite(GREEN_LED, LOW);
+                // stop the tone playing:
+                noTone(BEEP);
+            }
+            break;
+
+        case 101:
+            // 101: Setup Success
             digitalWrite(GREEN_LED, HIGH);
-            delay(500);
+            tone(BEEP, 1930);
+            delay(150);
+            tone(BEEP, 1630);
+            delay(150);
+            tone(BEEP, 1930);
+            delay(100);
+            noTone(BEEP);
+            delay(1000);
             digitalWrite(GREEN_LED, LOW);
-            delay(500);
+            delay(250);
             break;
             
         case 201:
@@ -257,7 +297,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     mensagem.toCharArray(comp_info, sizeof comp_info);
 
     // Get device ID and payload message
-    id = strtok (comp_info,"###");
+    id = strtok (comp_info, "###");
     msg = strtok (NULL, "###");
 
     if(strcmp(id, nodeMCUClient) == 0){
@@ -503,6 +543,8 @@ void setup() {
     cnt = 0;
 
     snprintf(buf_init, sizeof buf_init, "%s###%s", nodeMCUClient, "INIT");
+
+    response(101);
 
 }
 
