@@ -32,6 +32,7 @@
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
 #include <SPI.h>
 #include "MFRC522.h"
+#include "pitches.h"
 
 #define RST_PIN 0 // RST-PIN for RC522 - RFID 
 #define SS_PIN 2  // SDA-PIN for RC522 - RFID  
@@ -48,11 +49,15 @@
 
 /*  Counters and flags  */
 
-int cnt=0; // Counter used to assure that one RFID card can't be considered twice in a time interval
+int cnt = 0; // Counter used to assure that one RFID card can't be considered twice in a time interval
 int cnt_ack = 0; // Counter used to manage the possibility of the Python client to be disconnected
+int cnt_response = 0; // Counter used to manage the possibility of losing response message
+int timeout = 1000; // Timeout value
 
 int flag_init = 1; // Flag that allows to manage the starting and end of a session
 int flag_ack = 0; // Flag to manage the ACK counter
+int flag_response = 0; // Timeout to consider message lost
+int flag_auth = 1;
 
 /*  Variables for the config.json file  */
 
@@ -70,6 +75,7 @@ char authCodeb64[200];
 char rfid_b64[200];
 AES aes;
 char iv_py[20]; // This variable stores the session ID sent from the Python client, to compute the HMAC and it is also used as IV for the AES encryption
+unsigned int sessionIdLength = 16;
 char comp_info[100];
 
 /*  Buffers  */
@@ -77,7 +83,19 @@ char comp_info[100];
 char buf[512];
 char buf_init[20];
 char buf_hmac[256];
-char buf_acceso[256];
+char buf_access[256];
+
+/* notes in the melody: */
+
+int melody[] = {
+    NOTE_C4, NOTE_G3, NOTE_G3, NOTE_A3, NOTE_G3, 0, NOTE_B3, NOTE_C4
+};
+
+/* note durations: 4 = quarter note, 8 = eighth note, etc.: */
+
+int noteDurations[] = {
+    4, 8, 8, 4, 4, 4, 4, 4
+};
 
 /*  Other variables  */
 
@@ -89,7 +107,7 @@ const int mqtt_port = 1883;
 char rfidstr[15];
 bool shouldSaveConfig = true;
 String currentCard = "";
-String currentCardold = "";
+String currentCardOld = "";
 
 /*****************************************************************************************************************/
 
@@ -98,189 +116,271 @@ String currentCardold = "";
 /*  Callback notifying us of the need to save config  */
 
 void saveConfigCallback () { 
-  Serial.println("Should save config");
-  shouldSaveConfig = true;
+    Serial.println("Should save config");
+    shouldSaveConfig = true;
 }
 
 /*  Function to convert a char array to a byte array  */
 
-void CharToByte(char* chars, byte* bytes, unsigned int count){
+void CharToByte(char* chars, byte* bytes, unsigned int count) {
     for(unsigned int i = 0; i < count; i++)
         bytes[i] = (byte)chars[i];
 }
 
 /*  Function utilized to carry out the encryption process --> out = Base64(AES(Base64(in)))  */
 
-void encrypt_rfid(char rfidstr[], char iv_py[])
-{
-  byte cipher_rfid[1000];
-  
-  int len = base64_encode(rfid_b64, rfidstr, strlen(rfidstr));
-  aes.do_aes_encrypt((byte *)rfid_b64, len, cipher_rfid, (byte *)key, 128, (byte *)iv_py);
-  base64_encode(rfid_b64, (char *)cipher_rfid, aes.get_size());
+void encrypt_rfid(char rfidstr[], char iv_py[]) {
+    byte cipher_rfid[1000];
+
+    int len = base64_encode(rfid_b64, rfidstr, strlen(rfidstr));
+    aes.do_aes_encrypt((byte *)rfid_b64, len, cipher_rfid, (byte *)key, 128, (byte *)iv_py);
+    base64_encode(rfid_b64, (char *)cipher_rfid, aes.get_size());
 }
 
 /*  Routine employed to read the buffer where the RFID ID is stored and transform it to ASCII code  */
 
 void dump_byte_array(byte *buffer, byte bufferSize) {
-  
-  String rfid;
-  char s[100];
- 
-  for (byte i = 0; i < bufferSize; i++) {
-    //Convert from byte to Hexadecimal
-    sprintf(s, "%s%x", buffer[i] < 0x10 ? "0" : "", mfrc522.uid.uidByte[i]);
-    //Concatenate msg
-    strcat( &rfidstr[i] , s);
-  }
-  
-  currentCard = rfidstr;
-  Serial.println(" ");
-  Serial.print("RFID: " + String(rfidstr));
+    String rfid;
+    char s[100];
 
-  rfid = String(rfidstr).substring(strlen(rfidstr)-8,strlen(rfidstr));
-   
-  Serial.println("");
-  Serial.println("Verifing...");
-  Serial.println("");
+    for (byte i = 0; i < bufferSize; i++) {
+        // Convert from byte to Hexadecimal
+        sprintf(s, "%s%x", buffer[i] < 0x10 ? "0" : "", mfrc522.uid.uidByte[i]);
+        // Concatenate msg
+        strcat(&rfidstr[i] , s);
+    }
+
+    currentCard = rfidstr;
+    Serial.println("RFID: " + String(rfidstr));
+
+    rfid = String(rfidstr).substring(strlen(rfidstr)-8,strlen(rfidstr));
+}
+
+/* Function used to print response using LEDs and Buzzer */
+
+void response(int response_code) {
+    switch(response_code) {
+        case 100:
+            // 100: Setup melody
+            // iterate over the notes of the melody:
+            for (int thisNote = 0; thisNote < 8; thisNote++) {
+                // to calculate the note duration, take one second divided by the note type.
+                //e.g. quarter note = 1000 / 4, eighth note = 1000/8, etc.
+                int noteDuration = 1000 / noteDurations[thisNote];
+                digitalWrite(GREEN_LED, HIGH);
+                tone(BEEP, melody[thisNote], noteDuration);
+
+                // to distinguish the notes, set a minimum time between them.
+                // the note's duration + 30% seems to work well:
+                int pauseBetweenNotes = noteDuration * 1.30;
+                delay(pauseBetweenNotes);
+                digitalWrite(GREEN_LED, LOW);
+                // stop the tone playing:
+                noTone(BEEP);
+            }
+            break;
+
+        case 101:
+            // 101: Setup Success
+            digitalWrite(GREEN_LED, HIGH);
+            tone(BEEP, 1930);
+            delay(150);
+            tone(BEEP, 1630);
+            delay(150);
+            tone(BEEP, 1930);
+            delay(100);
+            noTone(BEEP);
+            delay(1000);
+            digitalWrite(GREEN_LED, LOW);
+            delay(250);
+            break;
+            
+        case 201:
+            // 201: Success (Check-in)
+            digitalWrite(GREEN_LED, HIGH);
+            tone(BEEP, 1630);
+            delay(150);
+            tone(BEEP, 1930);
+            delay(100);
+            noTone(BEEP);
+            delay(1000);
+            digitalWrite(GREEN_LED, LOW);
+            delay(250);
+            break;
+
+        case 202:
+            // 202: Success (Check-out)
+            digitalWrite(GREEN_LED, HIGH);
+            tone(BEEP, 1930);
+            delay(150);
+            tone(BEEP, 1630);
+            delay(100);
+            noTone(BEEP);
+            delay(1000);
+            digitalWrite(GREEN_LED, LOW);
+            delay(250);
+            break;
+
+        case 400:
+            break;
+
+        case 401:
+            // 401: Unauthorized;
+            digitalWrite(RED_LED, HIGH);
+            delay(500);
+            digitalWrite(RED_LED, LOW);
+            delay(500);
+            digitalWrite(RED_LED, HIGH);
+            delay(150);
+            digitalWrite(RED_LED, LOW);
+            delay(150);
+            break;
+
+        case 404:
+            // 404: Response not found;
+            digitalWrite(RED_LED, HIGH);
+            tone(BEEP, 2030);
+            delay(150);
+            tone(BEEP, 2030);
+            delay(100);
+            noTone(BEEP);
+            delay(1000);
+            digitalWrite(RED_LED, LOW);
+            delay(250);
+            break;
+
+        case 504:
+            // 504: Timed out waiting ACK;
+            digitalWrite(RED_LED, HIGH);
+            delay(250);
+            digitalWrite(RED_LED, LOW);
+            delay(250);
+            digitalWrite(RED_LED, HIGH);
+            delay(250);
+            digitalWrite(RED_LED, LOW);
+            delay(250);
+            break;
+    }
 }
 
 /*  Function used to connect the nodeMCU to the MQTT server  */
 
 void conectMqtt() {
-  while (!client.connected()) {
-    Serial.print("ConnectingMQTT ...");
-    if (client.connect(nodeMCUClient,userMQTT,passwordMQTT)){  //"esp8266","mqtt_rfid","password"
-      Serial.println("Connected");
-      //Subscribing to topics
-      client.subscribe("response");
-      client.subscribe("ack");
-    } else {
-      digitalWrite(RED_LED, HIGH);
-      Serial.print("Error");
-      Serial.print(client.state());
-      Serial.println("Retry in 5 seconds");
+    while (!client.connected()) {
+        Serial.print("ConnectingMQTT ...");
+        if (client.connect(nodeMCUClient,userMQTT,passwordMQTT)){  //"esp8266","mqtt_rfid","password"
+            Serial.println("Connected");
+            // Subscribing to topics
+            client.subscribe("response");
+            client.subscribe("ack");
+            client.subscribe("reset");
+        } else {
+            digitalWrite(RED_LED, HIGH);
+            Serial.print("Error");
+            Serial.println(client.state());
+            Serial.println("Retry in 5 seconds");
+        }
+        delay(500);
+        digitalWrite(RED_LED, LOW);
+        delay(500);
     }
-    delay(500);
-    digitalWrite(RED_LED, LOW);
-    delay(500);
-  }
 }
 
 /*  Callback called when a MQTT message arrives, to distinguish bewteen topics to make distinct actions  */
 
 void callback(char* topic, byte* payload, unsigned int length) {
   
-  currentCardold = currentCard;
-  currentCard = "";
-  SHA256HMAC hmac(key_hmac, KEY_LENGTH);  
-  Serial.println();
-  Serial.print("Welcome [");
-  Serial.print(topic);
-  Serial.print("]: ");
-  String mensagem = "";
-  char * id;
-  char * msg;
-  
-  //Convert msg from byte to string
-  for (int i = 0; i < length; i++) {
-    mensagem += (char)payload[i];
-  }
-  
-  mensagem.toCharArray(comp_info, sizeof comp_info);
+    String mensagem = "";
+    SHA256HMAC hmac(key_hmac, KEY_LENGTH);
+    char * id;
+    char * msg;
 
-  Serial.println(mensagem);
-  Serial.println();
-  Serial.println(comp_info);
-  Serial.println();
-
-  id = strtok (comp_info,"###");
-  Serial.println("Second time:");
-  Serial.println(comp_info);
-  Serial.println();
-  msg = strtok (NULL, "###");
-  
-  Serial.println(id);
-  Serial.println();
-  Serial.println(msg);
-  Serial.println();
-
-  if(strcmp(id, nodeMCUClient) == 0){
-      if(strcmp(topic, "response") == 0){
-          cnt = 0;
-          if(strcmp(msg, "NOAUTH") == 0){
-              digitalWrite(RED_LED, HIGH);
-              delay(500);
-              digitalWrite(RED_LED, LOW);
-              delay(500);
-              digitalWrite(RED_LED, HIGH);
-              delay(150);
-              digitalWrite(RED_LED, LOW);
-              delay(150);
-          }
-          else {
-              if(strcmp(msg, "check_in") == 0){
-                  digitalWrite(GREEN_LED, HIGH);
-                  tone(BEEP, 1630);
-                  delay(150);
-                  tone(BEEP, 1930);
-                  delay(100);
-                  noTone(BEEP);
-                  delay(1000);
-                  digitalWrite(GREEN_LED, LOW);
-                  delay(250);
-              } else {
-                  if(strcmp(msg, "check_out") == 0){
-                      digitalWrite(GREEN_LED, HIGH);
-                      tone(BEEP, 1930);
-                      delay(150);
-                      tone(BEEP, 1630);
-                      delay(100);
-                      noTone(BEEP);
-                      delay(1000);
-                      digitalWrite(GREEN_LED, LOW);
-                      delay(250);
-                  } else {
-                      digitalWrite(RED_LED, HIGH);
-                      tone(BEEP, 2030);
-                      delay(150);
-                      tone(BEEP, 2030);
-                      delay(100);
-                      noTone(BEEP);
-                      delay(1000);
-                      digitalWrite(RED_LED, LOW);
-                      delay(250);
-                  }
-              }
-          }
-      } else if(strcmp(topic, "ack") == 0){
-          if(strcmp(msg, "otherID") == 0){
-            Serial.println("OTHER ID");
-            Serial.println();
-            ESP.reset();
-          } else {
-            cnt_ack = 0;
-            //cnt=0;
-            flag_ack = 0;
-            strcpy(iv_py,msg);
-            Serial.println(" ");
-            Serial.println(iv_py);
-            Serial.println(" ");
-            hmac.doUpdate(iv_py,strlen(iv_py));
-            hmac.doFinal(authCode);
-            Serial.println("AUTH CODE");
-            Serial.println();
-        
-            for (byte i=0; i < SHA256HMAC_SIZE; i++)
-            {
-            Serial.print("0123456789abcdef"[authCode[i]>>4]);
-              Serial.print("0123456789abcdef"[authCode[i]&0xf]);
-            }
-            Serial.println(" ");
-            flag_init = 0;
-          }
+    // Convert msg from byte to string and then to CharArray
+    for (unsigned int i = 0; i < length; i++) {
+        mensagem += (char)payload[i];
     }
-  } else Serial.println("Message not for this device: " + mensagem);
+    mensagem.toCharArray(comp_info, sizeof comp_info);
+
+    // Get device ID and payload message
+    id = strtok (comp_info, "###");
+    msg = strtok (NULL, "###");
+
+    if(strcmp(id, nodeMCUClient) == 0){
+
+        Serial.print("Message received (DeviceID: ");
+        Serial.print(id);
+        Serial.print(" Payload: ");
+        Serial.println(msg);
+        // Response message received transaction with currentCard finished
+        currentCardOld = currentCard;
+        currentCard = "";
+
+        if(strcmp(topic, "response") == 0){
+            Serial.println("Response message received, printing action...");
+
+            // Setting counter to zero and printing response
+            cnt = 0;
+            flag_init = 1;
+            flag_auth = 1;
+            response(atoi(msg));
+        } else if(strcmp(topic, "ack") == 0){
+            // Types of ACK response
+            if (strcmp(msg, "sessionExpired") == 0){
+                Serial.println("Session has expired, restarting init process...");
+                flag_init = 1;
+                flag_auth = 1;
+            } else if (strcmp(msg, "authenticationFailed") == 0){
+                Serial.println("Authentication process failed, trying again...");
+                flag_init = 1;
+                flag_auth = 1;
+            } else if (strcmp(msg, "authenticationSuccessful") == 0){
+                // Logic when authenticated
+                Serial.println("Authentication process succeed");
+                // response(200);
+                flag_auth = 0;
+            } else if (strcmp(msg, "notAuthenticated") == 0){
+                Serial.println("Not authenticated... restarting");
+                flag_init = 1;
+                flag_auth = 1;
+            } else {
+                if (strlen(msg) == sessionIdLength) {
+                    Serial.println("Init ACK received with session ID");
+
+                    strcpy(iv_py,msg);
+
+                    hmac.doUpdate(iv_py,strlen(iv_py));
+                    hmac.doFinal(authCode);
+
+                    Serial.print("AUTH CODE: ");
+
+                    for (byte i=0; i < SHA256HMAC_SIZE; i++) {
+                        Serial.print("0123456789abcdef"[authCode[i]>>4]);
+                        Serial.print("0123456789abcdef"[authCode[i]&0xf]);
+                    }
+                    Serial.println();
+                    flag_init = 0;
+                } else {
+                    Serial.println("Unidentified ACK message");
+                    flag_init = 1;
+                    flag_auth = 1;
+                }
+            }
+            cnt = 0;
+            cnt_ack = 0;
+            flag_ack = 0;
+        } else if(strcmp(topic, "reset") == 0){
+            Serial.println("Resetting system parameters...");
+            wifiManager.resetSettings();
+            delay(3000);
+            ESP.reset();
+            delay(5000);
+        } else {
+            Serial.println("Topic not handled in this code... Please contact your system administrator");
+        }
+
+        flag_response = 0;
+
+    } else Serial.println("Message not for this device: " + mensagem);
 }
 
 /*****************************************************************************************************************/
@@ -288,174 +388,176 @@ void callback(char* topic, byte* payload, unsigned int length) {
 /************************************************* SETUP FUNCTION ************************************************/
 
 void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(115200);                      
-  Serial.println();
-  //wifiManager.resetSettings();
-  pinMode(RESET_PIN, INPUT); 
-  pinMode(RED_LED, OUTPUT);
-  pinMode(GREEN_LED, OUTPUT);
-  SPI.begin();           // Init SPI bus
-  mfrc522.PCD_Init();    // Init MFRC522
-  Serial.println("MFRC522 Initialized");
+    // put your setup code here, to run once:
+    Serial.begin(115200);
+    Serial.println();
+    // wifiManager.resetSettings();
+    pinMode(RESET_PIN, INPUT);
+    pinMode(RED_LED, OUTPUT);
+    pinMode(GREEN_LED, OUTPUT);
+    SPI.begin();           // Init SPI bus
+    mfrc522.PCD_Init();    // Init MFRC522
+    Serial.println("MFRC522 Initialized");
 
-  //read configuration from FS json
-  Serial.println("mounting FS...");
+    // read configuration from FS json
+    Serial.print("Mounting File System.......");
 
-  if (SPIFFS.begin()) {
-    Serial.println("mounted file system");
-    if (SPIFFS.exists("/config.json")) {
-      //file exists, reading and loading
-      Serial.println("reading config file");
-      File configFile = SPIFFS.open("/config.json", "r");
-      if (configFile) {
-        Serial.println("opened config file");
-        size_t size = configFile.size();
-        // Allocate a buffer to store contents of the file.
-        std::unique_ptr<char[]> buf(new char[size]);
+    if (SPIFFS.begin()) {
+        Serial.println("OK");
+        if (SPIFFS.exists("/config.json")) {
+            //file exists, reading and loading
+            Serial.println("Reading configuration file.....");
+            File configFile = SPIFFS.open("/config.json", "r");
+            if (configFile) {
+                Serial.println("Configuration file opened");
+                size_t size = configFile.size();
+                // Allocate a buffer to store contents of the file.
+                std::unique_ptr<char[]> buf(new char[size]);
 
-        configFile.readBytes(buf.get(), size);
-        DynamicJsonBuffer jsonBuffer;
-        JsonObject& json = jsonBuffer.parseObject(buf.get());
-        json.printTo(Serial);
-        if (json.success()) {
-          Serial.println("\nparsed json");
-          strcpy(mqtt_server, json["mqtt_server"]);
-          strcpy(key, json["key"]);
-          strcpy(nodeMCUClient, json["nodeMCUClient"]);
-          strcpy(userMQTT, json["userMQTT"]);
-          strcpy(passwordMQTT, json["passwordMQTT"]);
-        } else {
-          Serial.println("failed to load json config");
+                configFile.readBytes(buf.get(), size);
+                DynamicJsonBuffer jsonBuffer;
+                JsonObject& json = jsonBuffer.parseObject(buf.get());
+                json.printTo(Serial);
+                if (json.success()) {
+                    Serial.println("JSON Parsed Successfully");
+                    strcpy(mqtt_server, json["mqtt_server"]);
+                    strcpy(key, json["key"]);
+                    strcpy(nodeMCUClient, json["nodeMCUClient"]);
+                    strcpy(userMQTT, json["userMQTT"]);
+                    strcpy(passwordMQTT, json["passwordMQTT"]);
+                } else {
+                    Serial.println("JSON Parse Failed");
+                }
+            }
         }
-      }
+    } else {
+        Serial.println("FAILED");
     }
-  } else {
-    Serial.println("failed to mount FS");
-  }
-  //end read
-  
-  Serial.println(mqtt_server);
-  Serial.println(key);
-  Serial.println(nodeMCUClient);
-  Serial.println(userMQTT);
-  Serial.println(passwordMQTT);
+    // end read
 
-  // The extra parameters to be configured (can be either global or just in the setup)
-  // After connecting, parameter.getValue() will get you the configured value
-  // id/name placeholder/prompt default length
-
-  WiFiManagerParameter custom_mqtt_server("mqtt_server", "MQTT Server", mqtt_server, 14);
-  WiFiManagerParameter custom_key("key", "AES key", key, 19);
-  WiFiManagerParameter custom_nodeMCUClient("nodeMCUClient", "NodeMCU Client", nodeMCUClient, 14);
-  WiFiManagerParameter custom_userMQTT("userMQTT", "MQTT Username", userMQTT, 14);
-  WiFiManagerParameter custom_passwordMQTT("passwordMQTT", "MQTT Password", passwordMQTT, 14);
-
-  //WiFiManager
-  //Local intialization. Once its business is done, there is no need to keep it around
-  //WiFiManager wifiManager;
-
-  //set config save notify callback
-  wifiManager.setSaveConfigCallback(saveConfigCallback);
-
-  //add all your parameters here
-
-  wifiManager.addParameter(&custom_mqtt_server);
-  wifiManager.addParameter(&custom_key);
-  wifiManager.addParameter(&custom_nodeMCUClient);
-  wifiManager.addParameter(&custom_userMQTT);
-  wifiManager.addParameter(&custom_passwordMQTT);
-
-  //reset settings - for testing
-  //wifiManager.resetSettings();
-
-  //set minimu quality of signal so it ignores AP's under that quality
-  //defaults to 8%
-  wifiManager.setMinimumSignalQuality();
-  //sets timeout until configuration portal gets turned off
-  //useful to make it all retry or go to sleep
-  //in seconds
-  wifiManager.setTimeout(180);
-
-  //fetches ssid and pass and tries to connect
-  //if it does not connect it starts an access point with the specified name
-  //here  "AutoConnectAP"
-  //and goes into a blocking loop awaiting configuration
-
-  if (!wifiManager.autoConnect("AutoConnectAP", "12345678")) {
-    Serial.println("failed to connect and hit timeout");
-    delay(3000);
-    //reset and try again, or maybe put it to deep sleep
-    ESP.reset();
-    delay(5000);
-  } else {
-    Serial.println("password:12345678");
-  }
-
-  //if you get here you have connected to the WiFi
-  Serial.println("*CONNECTED*");
-
-  //read updated parameters
-
-  strcpy(mqtt_server, custom_mqtt_server.getValue());
-  strcpy(key, custom_key.getValue());
-  strcpy(nodeMCUClient, custom_nodeMCUClient.getValue());
-  strcpy(userMQTT, custom_userMQTT.getValue());
-  strcpy(passwordMQTT, custom_passwordMQTT.getValue());
-
-  //save the custom parameters to FS
-  if (shouldSaveConfig) {
-    Serial.println("saving config");
-    DynamicJsonBuffer jsonBuffer;
-    JsonObject& json = jsonBuffer.createObject();
-
-    json["mqtt_server"] = mqtt_server;
-    json["key"] = key;//"M1k3y1sdAb3St0n3";
-    json["nodeMCUClient"] = nodeMCUClient;
-    json["userMQTT"] = userMQTT;
-    json["passwordMQTT"] = passwordMQTT;   
-
-    Serial.println("+++++++++++++++++");
-
+    Serial.println(mqtt_server);
+    Serial.println(key);
     Serial.println(nodeMCUClient);
     Serial.println(userMQTT);
     Serial.println(passwordMQTT);
 
-    File configFile = SPIFFS.open("/config.json", "w");
-    if (!configFile) {
-      Serial.println("failed to open config file for writing");
+    // The extra parameters to be configured (can be either global or just in the setup)
+    // After connecting, parameter.getValue() will get you the configured value
+    // id/name placeholder/prompt default length
+
+    WiFiManagerParameter custom_mqtt_server("mqtt_server", "MQTT Server", mqtt_server, 14);
+    WiFiManagerParameter custom_key("key", "AES key", key, 19);
+    WiFiManagerParameter custom_nodeMCUClient("nodeMCUClient", "NodeMCU Client", nodeMCUClient, 14);
+    WiFiManagerParameter custom_userMQTT("userMQTT", "MQTT Username", userMQTT, 14);
+    WiFiManagerParameter custom_passwordMQTT("passwordMQTT", "MQTT Password", passwordMQTT, 14);
+
+    // WiFiManager
+    // Local intialization. Once its business is done, there is no need to keep it around
+    // WiFiManager wifiManager;
+
+    // Set config save notify callback
+    wifiManager.setSaveConfigCallback(saveConfigCallback);
+
+    // Add all your parameters here
+
+    wifiManager.addParameter(&custom_mqtt_server);
+    wifiManager.addParameter(&custom_key);
+    wifiManager.addParameter(&custom_nodeMCUClient);
+    wifiManager.addParameter(&custom_userMQTT);
+    wifiManager.addParameter(&custom_passwordMQTT);
+
+    // Reset settings - for testing
+    // wifiManager.resetSettings();
+
+    // Set minimu quality of signal so it ignores AP's under that quality
+    // defaults to 8%
+    wifiManager.setMinimumSignalQuality();
+    // Sets timeout until configuration portal gets turned off
+    // useful to make it all retry or go to sleep
+    // in seconds
+    wifiManager.setTimeout(180);
+
+    // Fetches ssid and pass and tries to connect
+    // if it does not connect it starts an access point with the specified name
+    // here  "AutoConnectAP"
+    // and goes into a blocking loop awaiting configuration
+
+    if (!wifiManager.autoConnect("AutoConnectAP", "12345678")) {
+        Serial.println("Failed to connect and hit timeout");
+        delay(3000);
+        // reset and try again, or maybe put it to deep sleep
+        ESP.reset();
+        delay(5000);
+    } else {
+        Serial.println("Password:12345678");
     }
 
-    json.prettyPrintTo(Serial);
-    json.printTo(configFile);
-    configFile.close();
-    //end save
-  }
-  Serial.println((char*)key_hmac);
-  CharToByte(key, key_hmac, KEY_LENGTH);
+    // If you get here you have connected to the WiFi
+    Serial.println("Connected to WIFI");
 
-  Serial.println("KEY HMAC + KEY : **********");
-  Serial.println((char*)key_hmac);
-  Serial.println(key);
+    // Read updated parameters
 
-  /*Serial.println("local ip");
-  Serial.println(WiFi.localIP());
-  Serial.println(WiFi.gatewayIP());
-  Serial.println(WiFi.subnetMask());
-  Serial.println(WiFi.SSID());*/
+    strcpy(mqtt_server, custom_mqtt_server.getValue());
+    strcpy(key, custom_key.getValue());
+    strcpy(nodeMCUClient, custom_nodeMCUClient.getValue());
+    strcpy(userMQTT, custom_userMQTT.getValue());
+    strcpy(passwordMQTT, custom_passwordMQTT.getValue());
 
-  //Set mqtt server data
-  client.setServer(mqtt_server, mqtt_port);
+    // Save the custom parameters to FS
+    if (shouldSaveConfig) {
+        Serial.println("Saving configuration");
+        DynamicJsonBuffer jsonBuffer;
+        JsonObject& json = jsonBuffer.createObject();
 
-  client.setCallback(callback);
+        json["mqtt_server"] = mqtt_server;
+        json["key"] = key;//"M1k3y1sdAb3St0n3";
+        json["nodeMCUClient"] = nodeMCUClient;
+        json["userMQTT"] = userMQTT;
+        json["passwordMQTT"] = passwordMQTT;
 
-  Serial.println(F("Ready!"));
+//        Serial.println("+++++++++++++++++");
+//
+//        Serial.println(nodeMCUClient);
+//        Serial.println(userMQTT);
+//        Serial.println(passwordMQTT);
 
-  Serial.println("#############################################################################");
+        File configFile = SPIFFS.open("/config.json", "w");
+        if (!configFile) {
+            Serial.println("Failed to open config file for writing");
+        }
 
-  cnt = 0;
+        json.prettyPrintTo(Serial);
+        json.printTo(configFile);
+        configFile.close();
+        //end save
+    }
+//    Serial.println((char*)key_hmac);
+    CharToByte(key, key_hmac, KEY_LENGTH);
 
-  snprintf(buf_init, sizeof buf_init, "%s###%s", nodeMCUClient, "INIT");
+//    Serial.println("KEY HMAC + KEY: **********");
+//    Serial.println((char*)key_hmac);
+//    Serial.println(key);
+
+//    Serial.println("local ip");
+//    Serial.println(WiFi.localIP());
+//    Serial.println(WiFi.gatewayIP());
+//    Serial.println(WiFi.subnetMask());
+//    Serial.println(WiFi.SSID());
+
+    // Set mqtt server data
+    client.setServer(mqtt_server, mqtt_port);
+
+    client.setCallback(callback);
+
+    Serial.println(F("Ready!"));
+
+    Serial.println("#############################################################################");
+
+    cnt = 0;
+
+    snprintf(buf_init, sizeof buf_init, "%s###%s", nodeMCUClient, "INIT");
+
+    response(101);
 
 }
 
@@ -464,91 +566,99 @@ void setup() {
 /************************************************* LOOP FUNCTION *************************************************/
 
 void loop() {
-  if (!client.connected()) {
-    conectMqtt();
-  }
-  
-  client.loop();
-
-  if(flag_init){
-    client.publish("init",buf_init);
-    flag_init = 0;
-    Serial.println("");
-    Serial.println("ACK ASKED");
-    Serial.println("");
-    flag_ack = 1;
-  }
-
-  if(flag_ack){
-    cnt_ack = cnt_ack + 1;
-  }
-  if(cnt_ack >= 100){
-    digitalWrite(RED_LED, HIGH);
-    delay(500);
-    digitalWrite(RED_LED, LOW);
-    delay(500);
-    flag_init=1;
-    
-  }
-  
-  cnt = cnt + 1;
-
-  if(cnt%50 == 0){
-    Serial.print("CONTADOR: " + String(cnt));
-    Serial.println("");
-    Serial.print("CURRENT RFID: " + String(currentCard));
-    Serial.println("");
-  }
-  /*if(cnt>=200){
-    Serial.println("<<<<<<<<<<<<<<<<<<<<<RESET>>>>>>>>>>>>>>>>>>>>>>>>>");
-    wifiManager.resetSettings();
-    delay(3000);
-    ESP.reset();
-    delay(5000);
-  }*/
-   
-  // Look for new cards
-  if ( ! mfrc522.PICC_IsNewCardPresent()) {
-    delay(50);
-    return;
-  }
-  // Select one of the cards
-  if ( ! mfrc522.PICC_ReadCardSerial()) {
-    delay(50);
-    return;
-  }
-  // Show some details of the PICC (that is: the tag/card)
-  Serial.println("");
-
-  if (currentCard == "" && cnt > 25) { // this cnt allows to make a wait between card reads 
-    base64_encode(authCodeb64, (char *)authCode, SHA256HMAC_SIZE);
-    snprintf(buf_hmac, sizeof buf_hmac, "%s###%s", nodeMCUClient, (char *)authCodeb64);
-    client.publish("hmac", buf_hmac);
-
-    dump_byte_array(mfrc522.uid.uidByte, mfrc522.uid.size);
-    encrypt_rfid(rfidstr,iv_py);
-    Serial.println("");
-    Serial.print("CURRENT CARD: " + String(currentCard));
-    Serial.println("");
-    Serial.print("CURRENT CARD OLD: " + String(currentCardold));
-    
-    Serial.println("");
-    Serial.print("MESSAGE: " + String(rfid_b64));
-    if(currentCard != currentCardold || cnt > 60){ // this cnt allows to set the time between card reads for the same card
-      snprintf(buf_acceso, sizeof buf_acceso, "%s###%s", nodeMCUClient, rfid_b64);
-      client.publish("acceso", buf_acceso);
-    } else {
-      currentCard = "";
+    if (!client.connected()) {
+        Serial.println("Client not connected to MQTT, trying to reconnect...");
+        conectMqtt();
     }
-    memset(rfid_b64, 0, sizeof(rfid_b64));
-    memset(rfidstr, 0, sizeof(rfidstr));
-    memset(buf_hmac, 0, sizeof(buf_hmac));
-    memset(buf_acceso, 0, sizeof(buf_acceso));
 
-    Serial.println();
-    flag_init = 1;
-    currentCardold = currentCard;
-    currentCard = "";
-    cnt = 0;
-  }
+    client.loop();
+
+    // Enter here if flag_init = 1 --> Init step
+    if (flag_init){
+        client.publish("init", buf_init);
+        flag_init = 0;
+        Serial.println("Init message sent, waiting ACK");
+        flag_ack = 1;
+    }
+
+    // Enter here if flag_ack = 1 device is waiting for an acknowledgment (ack) message
+    if (flag_ack){
+        cnt_ack = cnt_ack + 1;
+    }
+    // If ACK is not received we try to resend it two times and the reset the ESP
+    if (cnt_ack%100 == 0 && cnt_ack != 0){
+        Serial.println("ACK Counter: " + String(cnt_ack));
+        response(504);
+        flag_init = 1;
+        flag_auth = 1;
+        if (cnt_ack == 300) {
+            ESP.reset();
+        }
+    }
+
+    if (cnt < 101) {
+        cnt = cnt + 1;
+    }
+    if (cnt%50 == 0){
+        Serial.println("Current RFID: " + String(currentCard));
+    }
+
+    // When we send the RFID ID we may lose the response message, so we set a timeout
+    if (flag_response) {
+        cnt_response += 1;
+        if (cnt_response > timeout) {
+            Serial.println("Timeout hitted... A response message has been lost");
+            currentCardOld = currentCard;
+            currentCard = "";
+            flag_response = 0;
+        }
+    }
+
+    // Enter here if flag_ack = 0 (device has already received ack from init step) and flag_auth = 0 (device has not been
+    // authenticated yet) --> Authentication step
+    if (!flag_ack && flag_auth) {
+        Serial.println("Going for authentication");
+        // Encode authCode (sessionId after HMAC encryption) and publish to hmac channel
+        base64_encode(authCodeb64, (char *)authCode, SHA256HMAC_SIZE);
+        snprintf(buf_hmac, sizeof buf_hmac, "%s###%s", nodeMCUClient, (char *)authCodeb64);
+        client.publish("hmac", buf_hmac);
+        flag_auth = 0;
+        flag_ack = 1;
+        // Until authentication process succeeds the device will not be able to read any card
+        delay(50);
+        return;
+    }
+
+    // Look for new cards
+    if ( ! mfrc522.PICC_IsNewCardPresent()) {
+        delay(50);
+        return;
+    }
+    // Select one of the cards
+    if ( ! mfrc522.PICC_ReadCardSerial()) {
+        delay(50);
+        return;
+    }
+
+    if (cnt > 25 && !flag_response) { // this cnt allows to make a wait between card reads
+        // Encrypt RFID ID to be sent over access channel
+        dump_byte_array(mfrc522.uid.uidByte, mfrc522.uid.size); // Here we set the value for currentCard
+        encrypt_rfid(rfidstr, iv_py);
+
+        // Sent message to MQTT server
+        if(currentCard != currentCardOld || cnt > 60){ // this cnt allows to set the time between card reads for the same card
+            Serial.println("Message sent: " + String(rfid_b64));
+            snprintf(buf_access, sizeof buf_access, "%s###%s", nodeMCUClient, rfid_b64);
+            client.publish("access", buf_access);
+            flag_response = 1;
+        } else {
+            currentCard = "";
+        }
+        // Memory reset
+        memset(rfid_b64, 0, sizeof(rfid_b64));
+        memset(rfidstr, 0, sizeof(rfidstr));
+        memset(buf_hmac, 0, sizeof(buf_hmac));
+        memset(buf_access, 0, sizeof(buf_access));
+    }
+
 }
