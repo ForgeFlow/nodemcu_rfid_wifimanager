@@ -252,9 +252,13 @@ void response(int response_code) {
         case 504:
             // 504: Timed out waiting ACK;
             digitalWrite(RED_LED, HIGH);
-            delay(500);
+            delay(250);
             digitalWrite(RED_LED, LOW);
-            delay(500);
+            delay(250);
+            digitalWrite(RED_LED, HIGH);
+            delay(250);
+            digitalWrite(RED_LED, LOW);
+            delay(250);
             break;
     }
 }
@@ -572,12 +576,13 @@ void loop() {
     if (flag_ack){
         cnt_ack = cnt_ack + 1;
     }
-    // If ACK counter is greater than 100 we assume ack message has been lost and we go back to init step
-    if (cnt_ack >= 100){
+    // If ACK is not received we try to resend it two times and the reset the ESP
+    if (cnt_ack%100 == 0 && cnt_ack != 0){
+        Serial.println("ACK Counter: " + String(cnt_ack));
         response(504);
         flag_init = 1;
-        flag_auth = 0;
-        if (cnt_ack > 300) {
+        flag_auth = 1;
+        if (cnt_ack == 300) {
             ESP.reset();
         }
     }
