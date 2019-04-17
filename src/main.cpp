@@ -273,6 +273,7 @@ void conectMqtt() {
             // Subscribing to topics
             client.subscribe("response");
             client.subscribe("ack");
+            client.subscribe("reset");
         } else {
             digitalWrite(RED_LED, HIGH);
             Serial.print("Error");
@@ -367,6 +368,14 @@ void callback(char* topic, byte* payload, unsigned int length) {
             cnt = 0;
             cnt_ack = 0;
             flag_ack = 0;
+        } else if(strcmp(topic, "reset") == 0){
+            Serial.println("Resetting system parameters...");
+            wifiManager.resetSettings();
+            delay(3000);
+            ESP.reset();
+            delay(5000);
+        } else {
+            Serial.println("Topic not handled in this code... Please contact your system administrator");
         }
 
         flag_response = 0;
